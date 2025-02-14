@@ -1,0 +1,11 @@
+[package]
+name = "websocket-proxy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.28", features = ["full"] }
+tokio-tungstenite = "0.19"
+futures-util = "0.3"
+chrono = "0.4"
+

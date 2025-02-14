@@ -2,3 +2,4 @@
 .env
 integration_logs
 .vscode
+websocket-proxy/target
