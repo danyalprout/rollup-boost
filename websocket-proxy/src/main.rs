@@ -1,3 +1,8 @@
+mod server;
+mod notify;
+#[cfg(all(feature = "integration", test))]
+mod integration;
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -47,8 +52,7 @@ async fn main() {
 
     let addr = ([0, 0, 0, 0], 8545).into();
     let server = Server::bind(&addr).serve(make_svc);
-    println!("Server running on http://127.0.0.1:8080");
-    println!("WebSocket endpoint: ws://127.0.0.1:8080/ws");
+    println!("Server running on 0.0.0.0:8545");
 
     if let Err(e) = server.await {
         eprintln!("Server error: {}", e);
@@ -137,7 +141,7 @@ async fn handle_websocket_connection(
 
     println!("New WebSocket connection - ID: {}, IP: {}", client_id, remote_addr);
 
-    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
+    let (mut ws_sender, _) = ws_stream.split();
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
 
     // Store the client information
@@ -145,12 +149,6 @@ async fn handle_websocket_connection(
         sender,
         ip_addr: remote_addr,
     });
-
-    // Send initial message to confirm connection
-    if let Err(e) = ws_sender.send(Message::Text("Connected to WebSocket server".to_string())).await {
-        eprintln!("Error sending welcome message to client {} ({}): {}", client_id, remote_addr, e);
-        return;
-    }
 
     // Handle incoming messages from the broadcast channel
     let broadcast_task = tokio::spawn(async move {
@@ -162,28 +160,9 @@ async fn handle_websocket_connection(
         }
     });
 
-    // Handle incoming WebSocket messages
-    let receive_task = tokio::spawn(async move {
-        while let Some(result) = ws_receiver.next().await {
-            match result {
-                Ok(msg) => {
-                    if msg.is_close() {
-                        break;
-                    }
-                    println!("Received message from client {} ({}): {:?}", client_id, remote_addr, msg);
-                }
-                Err(e) => {
-                    eprintln!("WebSocket error for client {} ({}): {}", client_id, remote_addr, e);
-                    break;
-                }
-            }
-        }
-    });
-
     // Wait for either task to complete
     tokio::select! {
         _ = broadcast_task => {}
-        _ = receive_task => {}
     }
 
     // Remove client when disconnected
