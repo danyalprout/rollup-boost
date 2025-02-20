@@ -260,10 +260,10 @@ mod test {
 
         todo!("client four isn't being properly accepted due to rate limits");
         let client_four = harness.connect_client();
-        
+
         // harness.send_messages(vec!["four"]);
         // harness.wait_for_messages_to_drain().await;
-        // 
+        //
         // assert_eq!(vec!["one", "two", "three", "four"], harness.messages_for_client(client_one));
         // assert_eq!(vec!["one", "two", "three", "four"], harness.messages_for_client(client_two));
         // assert_eq!(vec!["one", "two"], harness.messages_for_client(client_three));

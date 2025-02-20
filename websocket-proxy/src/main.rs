@@ -14,7 +14,8 @@ use std::net::SocketAddr;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, Level};
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -45,14 +46,33 @@ struct Args {
         help = "Maximum number of concurrently connected clients"
     )]
     maximum_concurrent_connections: usize,
+
+    #[arg(long, env, default_value = "info")]
+    log_level: Level,
+
+    #[arg(long, env, default_value = "text")]
+    log_format: String,
 }
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt().init();
-
     dotenv().ok();
     let args = Args::parse();
+
+    let log_format = args.log_format.to_lowercase();
+    let log_level = args.log_level.to_string();
+    if log_format == "json" {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(EnvFilter::new(log_level))
+            .with_ansi(false)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::new(log_level))
+            .with_ansi(false)
+            .init();
+    }
 
     // Channel with two blocks
     let (send, _rec) = broadcast::channel(args.message_buffer_size);
