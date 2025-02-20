@@ -1,13 +1,14 @@
-use std::time::Duration;
 use axum::http::Uri;
-use backoff::{ExponentialBackoff, backoff::Backoff};
+use backoff::{backoff::Backoff, ExponentialBackoff};
+use futures::StreamExt;
+use std::time::Duration;
+use tokio::select;
 use tokio_tungstenite::{connect_async, tungstenite::Error};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
-use futures::{
-    StreamExt,
-};
 
-pub struct WebsocketSubscriber<F> where
+pub struct WebsocketSubscriber<F>
+where
     F: Fn(String) + Send + Sync + 'static,
 {
     uri: Uri,
@@ -34,44 +35,60 @@ where
         }
     }
 
-    pub async fn run(&mut self) {
-        info!("subscriber run");
+    pub async fn run(&mut self, token: CancellationToken) {
+        info!("starting subscriber");
         loop {
-            match self.connect_and_listen().await {
-                Ok(()) => {
-                    // Reset backoff on successful connection
-                    self.backoff.reset();
-                    info!("upstream connection closed");
+            select! {
+                _ = token.cancelled() => {
+                    info!("cancelled subscriber");
+                    return;
                 }
-                Err(e) => {
-                    error!("upstream websocket error: {}", e);
+                result = self.connect_and_listen() => {
+                    match result {
+                        Ok(()) => {
+                            info!(message="upstream connection closed");
+                        }
+                        Err(e) => {
+                            error!(message="upstream websocket error", error=e.to_string());
+                            if let Some(duration) = self.backoff.next_backoff() {
+                                warn!(message="recconecting", seconds=duration.as_secs());
+                                select! {
+                                    _ = token.cancelled() => {
+                                        info!(message="cancelled subscriber during backoff");
+                                        return
+                                    }
+                                    _ = tokio::time::sleep(duration) => {}
 
-                    if let Some(duration) = self.backoff.next_backoff() {
-                        warn!("Reconnecting in {} seconds", duration.as_secs());
-                        tokio::time::sleep(duration).await;
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    async fn connect_and_listen(&self) -> Result<(), Error> {
-        info!("connecting to websocket at {}", self.uri);
+    async fn connect_and_listen(&mut self) -> Result<(), Error> {
+        info!(
+            message = "connecting to websocket",
+            uri = self.uri.to_string()
+        );
 
         let (ws_stream, _) = connect_async(&self.uri).await?;
-        info!("websocket connection established");
+        info!(message = "websocket connection established");
+        self.backoff.reset();
 
         let (_, mut read) = ws_stream.split();
 
         while let Some(message) = read.next().await {
             match message {
                 Ok(msg) => {
-                    debug!("Received message: {:?}", msg);
                     let text = msg.to_text()?;
+                    debug!(message = "received message", payload = text);
                     (self.handler)(text.into());
                 }
                 Err(e) => {
-                    error!("Error receiving message: {}", e);
+                    error!(message = "error receiving message", error = e.to_string());
                     return Err(e);
                 }
             }

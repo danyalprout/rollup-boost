@@ -1,17 +1,21 @@
-use std::net::SocketAddr;
-use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
+use crate::registry::{ClientConnection, Registry};
+use axum::body::Body;
 use axum::extract::ws::WebSocket;
+use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use axum::Router;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
-use crate::registry::{Registry,ClientInfo};
+use axum::Router;
+use std::net::SocketAddr;
+use tokio_util::sync::CancellationToken;
+use tracing::info;
 
 #[derive(Clone)]
 struct ServerState {
     registry: Registry,
 }
 
+#[derive(Clone)]
 pub struct Server {
     listen_addr: SocketAddr,
     registry: Registry,
@@ -25,20 +29,30 @@ impl Server {
         }
     }
 
-    pub async fn listen(&self) {
+    pub async fn listen(&self, cancellation_token: CancellationToken) {
         let router = Router::new()
             .route("/healthz", get(healthz_handler))
             .route("/ws", any(websocket_handler))
-            .with_state(ServerState { registry: self.registry.clone() });
+            .with_state(ServerState {
+                registry: self.registry.clone(),
+            });
 
-        let listener = tokio::net::TcpListener::bind(self.listen_addr).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(self.listen_addr)
+            .await
+            .unwrap();
 
-        tracing::info!("listening on {}", listener.local_addr().unwrap());
+        info!(
+            message = "starting server",
+            address = listener.local_addr().unwrap().to_string()
+        );
 
         axum::serve(
             listener,
             router.into_make_service_with_connect_info::<SocketAddr>(),
-        ).await.unwrap()
+        )
+        .with_graceful_shutdown(cancellation_token.cancelled_owned())
+        .await
+        .unwrap()
     }
 }
 
@@ -51,18 +65,23 @@ async fn websocket_handler(
     ws: WebSocketUpgrade,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
-    println!("client at {addr} connected");
-    ws.on_upgrade(move |socket| handle_socket(socket, addr, state))
+    match state.registry.try_register(addr) {
+        Ok(client) => ws
+            .on_failed_upgrade(move |_e| {
+                info!(
+                    message = "failed to upgrade connection",
+                    ip = addr.to_string()
+                )
+            })
+            .on_upgrade(move |socket| handle_socket(socket, client, state)),
+        Err(_) => Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .body(Body::empty())
+            .unwrap(),
+    }
 }
 
-async fn handle_socket(
-    ws: WebSocket,
-    remote_addr: SocketAddr,
-    state: ServerState,
-) {
-    state.registry.subscribe(ClientInfo{
-        ip_addr: remote_addr,
-        websocket: ws,
-    }).await;
-    
+async fn handle_socket(ws: WebSocket, mut client: ClientConnection, state: ServerState) {
+    client.with_websocket(ws);
+    state.registry.subscribe(client).await;
 }
