@@ -143,6 +143,7 @@ impl RollupBoostServer {
         builder_client: ExecutionClient,
         boost_sync: bool,
         metrics: Option<Arc<ServerMetrics>>,
+        initial_execution_mode: ExecutionMode,
         flashblocks_client: Option<FlashblocksService>,
     ) -> Self {
         Self {
@@ -152,7 +153,7 @@ impl RollupBoostServer {
             metrics,
             payload_trace_context: Arc::new(PayloadTraceContext::new()),
             flashblocks_client: flashblocks_client.map(Arc::new),
-            execution_mode: Arc::new(Mutex::new(ExecutionMode::Enabled)),
+            execution_mode: Arc::new(Mutex::new(initial_execution_mode)),
         }
     }
 
