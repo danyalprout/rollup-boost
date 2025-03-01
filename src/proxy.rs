@@ -2,8 +2,8 @@ use crate::auth_layer::secret_to_bearer_header;
 use crate::metrics::ServerMetrics;
 use crate::server::PayloadSource;
 use alloy_rpc_types_engine::JwtSecret;
-use http::header::AUTHORIZATION;
-use http::{StatusCode, Uri};
+use http::header::{AUTHORIZATION, CONTENT_TYPE};
+use http::{HeaderValue, StatusCode, Uri};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
@@ -217,31 +217,7 @@ async fn forward_request(
 
     match client.request(req).await {
         Ok(resp) => {
-            let (parts, body) = resp.into_parts();
-            let (body_bytes, _) = http_helpers::read_body(&parts.headers, body, u32::MAX)
-                .await
-                .map_err(|e| {
-                    warn!(
-                        target: "proxy::forward_request",
-                        message = "error reading body",
-                        error = %e,
-                    );
-                    e
-                })?;
-            let rpc_status_code = parse_response_code(&body_bytes);
-            record_metrics(
-                metrics,
-                parts.status.to_string(),
-                rpc_status_code,
-                method,
-                start,
-                source,
-            )
-            .await;
-            Ok(http::Response::from_parts(
-                parts,
-                HttpBody::from(body_bytes),
-            ))
+            Ok(resp.map(HttpBody::new))
         }
         Err(e) => {
             error!(
