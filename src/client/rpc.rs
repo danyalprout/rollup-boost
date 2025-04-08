@@ -39,7 +39,7 @@ pub enum RpcClientError {
     Jwt(#[from] JwtError),
 }
 
-trait Code: Sized {
+pub trait Code: Sized {
     fn code(&self) -> i32;
 
     fn set_code(self) -> Self {
