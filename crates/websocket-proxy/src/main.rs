@@ -1,5 +1,6 @@
 mod auth;
 mod client;
+mod filter;
 mod metrics;
 mod rate_limit;
 mod registry;
@@ -127,6 +128,14 @@ struct Args {
         help = "Prefix for Redis keys"
     )]
     redis_key_prefix: String,
+
+    #[arg(
+        long,
+        env,
+        default_value = "false",
+        help = "Allow unauthenticated access to endpoints even if api-keys are provided"
+    )]
+    public_access_enabled: bool,
 }
 
 #[tokio::main]
@@ -261,7 +270,7 @@ async fn main() {
         subscriber_tasks.push(task);
     }
 
-    let registry = Registry::new(sender, metrics.clone());
+    let registry = Registry::new(sender, metrics.clone(), args.enable_compression);
 
     let rate_limiter = match &args.redis_url {
         Some(redis_url) => {
@@ -305,6 +314,7 @@ async fn main() {
         rate_limiter,
         authentication,
         args.ip_addr_http_header,
+        args.public_access_enabled,
     );
     let server_task = server.listen(token.clone());
 
