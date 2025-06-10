@@ -9,11 +9,12 @@ use tracing::{info, trace, warn};
 pub struct Registry {
     sender: Sender<Vec<u8>>,
     metrics: Arc<Metrics>,
+    compressed: bool,
 }
 
 impl Registry {
-    pub fn new(sender: Sender<Vec<u8>>, metrics: Arc<Metrics>) -> Self {
-        Self { sender, metrics }
+    pub fn new(sender: Sender<Vec<u8>>, metrics: Arc<Metrics>, compressed: bool) -> Self {
+        Self { sender, metrics, compressed }
     }
 
     pub async fn subscribe(&self, mut client: ClientConnection) {
@@ -24,12 +25,13 @@ impl Registry {
         metrics.new_connections.increment(1);
 
         let filter = client.filter.clone();
+        let compressed = self.compressed;
 
         tokio::spawn(async move {
             loop {
                 match receiver.recv().await {
                     Ok(msg) => {
-                        if filter.matches(&msg) {
+                        if filter.matches(&msg, compressed) {
                             trace!(message = "filter matched for client", client = client.id(), filter = ?filter);
                             match client.send(msg.clone()).await {
                                 Ok(_) => {

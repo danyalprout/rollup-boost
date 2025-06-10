@@ -273,7 +273,7 @@ async fn main() {
         subscriber_tasks.push(task);
     }
 
-    let registry = Registry::new(sender, metrics.clone());
+    let registry = Registry::new(sender, metrics.clone(), args.enable_compression);
 
     let rate_limiter = match &args.redis_url {
         Some(redis_url) => {

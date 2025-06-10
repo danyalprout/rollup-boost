@@ -1,6 +1,8 @@
 use serde_json::{self, Value};
-use tracing::{trace, debug, warn};
+use tracing::{trace, debug, warn, info};
 use std::collections::HashSet;
+use std::io::Write;
+use brotli::DecompressorWriter;
 
 #[derive(Debug, Clone, Copy)]
 pub enum MatchMode {
@@ -75,12 +77,34 @@ impl FilterType {
         }
     }
 
-    pub fn matches(&self, payload: &str) -> bool {
+    pub fn matches(&self, payload: &Vec<u8>, enable_compression: bool) -> bool {
         if let FilterType::None = self {
             return true;
         }
+        
+        let uncompressed_data = if enable_compression {
+            let mut uncompressed_bytes = Vec::new();
+            {
+                let mut decoder = DecompressorWriter::new(&mut uncompressed_bytes, 4096);
+                match decoder.write(payload) {
+                    Ok(_) => (),
+                    Err(e) => {
+                        info!("error while decoding payload: {}", e);
+                        return false;
+                    }
+                }
+            }
+            uncompressed_bytes
+        } else {
+            payload.clone()
+        };
 
-        let json_result: Result<Value, _> = serde_json::from_str(payload);
+        let value = String::from_utf8(uncompressed_data);
+        if value.is_err() {
+            return false;
+        }
+
+        let json_result: Result<Value, _> = serde_json::from_str(value.unwrap().as_str());
         match json_result {
             Ok(json) => {
                 let result = self.json_matches(&json);
@@ -231,8 +255,8 @@ impl FilterType {
 mod tests {
     use super::*;
 
-    fn get_test_payload() -> &'static str {
-        r#"
+    fn get_test_payload() -> Vec<u8> {
+        let data = r#"
   {
     "payload_id": "0x0307de8ff1df8ed8",
     "index": 0,
@@ -258,7 +282,8 @@ mod tests {
       }
     }
   }
-"#
+"#;
+        data.as_bytes().to_vec()
     }
 
     #[test]
@@ -271,7 +296,7 @@ mod tests {
             "0x4200000000000000000000000000000000000010".to_string(),
         ];
         let filter = FilterType::new_addresses(addresses);
-        assert!(filter.matches(payload));
+        assert!(filter.matches(&payload, false));
 
         // Test with multiple addresses, none should match
         let addresses = vec![
@@ -279,7 +304,7 @@ mod tests {
             "0x2222222222222222222222222222222222222222".to_string(),
         ];
         let filter = FilterType::new_addresses(addresses);
-        assert!(!filter.matches(payload));
+        assert!(!filter.matches(&payload, false));
     }
 
     #[test]
@@ -292,7 +317,7 @@ mod tests {
             "0xb0444523268717a02698be47d0803aa7468c00acbed2f8bd93a0459cde61dd89".to_string(),
         ];
         let filter = FilterType::new_topics(topics);
-        assert!(filter.matches(payload));
+        assert!(filter.matches(&payload, false));
     }
 
     #[test]
@@ -303,25 +328,25 @@ mod tests {
         let addresses = vec!["0x4200000000000000000000000000000000000010".to_string()];
         let topics = vec!["0xb0444523268717a02698be47d0803aa7468c00acbed2f8bd93a0459cde61dd89".to_string()];
         let filter = FilterType::new_combined_with_mode(addresses, topics, MatchMode::Any);
-        assert!(filter.matches(payload));
+        assert!(filter.matches(&payload, false));
 
         // Test combined filter with ANY mode where only address matches (should pass)
         let addresses = vec!["0x4200000000000000000000000000000000000010".to_string()];
         let topics = vec!["0x1111111111111111111111111111111111111111111111111111111111111111".to_string()];
         let filter = FilterType::new_combined_with_mode(addresses, topics, MatchMode::Any);
-        assert!(filter.matches(payload));
+        assert!(filter.matches(&payload, false));
 
         // Test combined filter with ANY mode where only topic matches (should pass)
         let addresses = vec!["0x1111111111111111111111111111111111111111".to_string()];
         let topics = vec!["0xb0444523268717a02698be47d0803aa7468c00acbed2f8bd93a0459cde61dd89".to_string()];
         let filter = FilterType::new_combined_with_mode(addresses, topics, MatchMode::Any);
-        assert!(filter.matches(payload));
+        assert!(filter.matches(&payload, false));
 
         // Test combined filter with ANY mode where neither matches (should fail)
         let addresses = vec!["0x1111111111111111111111111111111111111111".to_string()];
         let topics = vec!["0x1111111111111111111111111111111111111111111111111111111111111111".to_string()];
         let filter = FilterType::new_combined_with_mode(addresses, topics, MatchMode::Any);
-        assert!(!filter.matches(payload));
+        assert!(!filter.matches(&payload, false));
     }
 
     #[test]
@@ -332,19 +357,19 @@ mod tests {
         let addresses = vec!["0x4200000000000000000000000000000000000010".to_string()];
         let topics = vec!["0xb0444523268717a02698be47d0803aa7468c00acbed2f8bd93a0459cde61dd89".to_string()];
         let filter = FilterType::new_combined_with_mode(addresses, topics, MatchMode::All);
-        assert!(filter.matches(payload));
+        assert!(filter.matches(&payload, false));
 
         // Test combined filter with ALL mode where only address matches (should fail)
         let addresses = vec!["0x4200000000000000000000000000000000000010".to_string()];
         let topics = vec!["0x1111111111111111111111111111111111111111111111111111111111111111".to_string()];
         let filter = FilterType::new_combined_with_mode(addresses, topics, MatchMode::All);
-        assert!(!filter.matches(payload));
+        assert!(!filter.matches(&payload, false));
 
         // Test combined filter with ALL mode where only topic matches (should fail)
         let addresses = vec!["0x1111111111111111111111111111111111111111".to_string()];
         let topics = vec!["0xb0444523268717a02698be47d0803aa7468c00acbed2f8bd93a0459cde61dd89".to_string()];
         let filter = FilterType::new_combined_with_mode(addresses, topics, MatchMode::All);
-        assert!(!filter.matches(payload));
+        assert!(!filter.matches(&payload, false));
     }
 
     #[test]
@@ -382,26 +407,26 @@ mod tests {
       }
     }
   }
-"#;
+"#.to_string().into_bytes();
 
         // Test address filter that should match (in logs)
         let filter = FilterType::new_addresses(vec!["0x4200000000000000000000000000000000000010".to_string()]);
-        assert!(filter.matches(payload));
+        assert!(filter.matches(&payload, false));
 
         // Test address filter that should match (in account balances)
         let filter = FilterType::new_addresses(vec!["0x4200000000000000000000000000000000000007".to_string()]);
-        assert!(filter.matches(payload));
+        assert!(filter.matches(&payload, false));
 
         // Test address filter that should not match
         let filter = FilterType::new_addresses(vec!["0x1111111111111111111111111111111111111111".to_string()]);
-        assert!(!filter.matches(payload));
+        assert!(!filter.matches(&payload, false));
 
         // Test topic filter that should match
         let filter = FilterType::new_topics(vec!["0xb0444523268717a02698be47d0803aa7468c00acbed2f8bd93a0459cde61dd89".to_string()]);
-        assert!(filter.matches(payload));
+        assert!(filter.matches(&payload, false));
 
         // Test topic filter that should not match
         let filter = FilterType::new_topics(vec!["0x1111111111111111111111111111111111111111111111111111111111111111".to_string()]);
-        assert!(!filter.matches(payload));
+        assert!(!filter.matches(&payload, false));
     }
 }
